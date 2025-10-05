@@ -1,4 +1,3 @@
-
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
@@ -11,6 +10,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import fetch from "node-fetch";
+import bcrypt from "bcryptjs";   // ✅ Added bcryptjs
 
 dotenv.config();
 
@@ -66,22 +66,40 @@ app.post("/api/upload", upload.single("file"), (req, res) => {
   res.json({ url: "/uploads/" + req.file.filename });
 });
 
-// Auth (basic demo)
+// Auth (with bcryptjs)
 app.post("/api/register", async (req, res) => {
-  const { username, password } = req.body;
-  const existing = await User.findOne({ username });
-  if (existing) return res.status(400).json({ error: "User exists" });
-  const user = new User({ username, password });
-  await user.save();
-  res.json({ success: true });
+  try {
+    const { username, password } = req.body;
+    const existing = await User.findOne({ username });
+    if (existing) return res.status(400).json({ error: "User exists" });
+
+    // hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = new User({ username, password: hashedPassword });
+    await user.save();
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Register error", err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 app.post("/api/login", async (req, res) => {
-  const { username, password } = req.body;
-  const user = await User.findOne({ username, password });
-  if (!user) return res.status(401).json({ error: "Invalid credentials" });
-  const token = jwt.sign({ id: user._id, username }, process.env.JWT_SECRET);
-  res.json({ token });
+  try {
+    const { username, password } = req.body;
+    const user = await User.findOne({ username });
+    if (!user) return res.status(401).json({ error: "Invalid credentials" });
+
+    // compare hashed password
+    const valid = await bcrypt.compare(password, user.password);
+    if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+
+    const token = jwt.sign({ id: user._id, username }, process.env.JWT_SECRET);
+    res.json({ token });
+  } catch (err) {
+    console.error("Login error", err);
+    res.status(500).json({ error: "Server error" });
+  }
 });
 
 // Socket.IO
@@ -104,8 +122,10 @@ io.on("connection", (socket) => {
           },
           body: JSON.stringify({
             model: "gpt-4o-mini",
-            messages: [{ role: "system", content: "You are UgoAI assistant." },
-                       { role: "user", content: msg.text }]
+            messages: [
+              { role: "system", content: "You are UgoAI assistant." },
+              { role: "user", content: msg.text }
+            ]
           })
         });
         const data = await aiRes.json();
